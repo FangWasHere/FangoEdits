@@ -11,7 +11,7 @@ TODO: Docs
 import os
 import statistics
 from random import choice, choices, randint, random, getrandbits
-from typing import Literal
+from typing import Literal, Optional
 
 import i18n
 import ujson
@@ -20,7 +20,7 @@ from scripts.cat.cats import Cat, BACKSTORIES
 from scripts.cat.enums import CatRank, CatGroup, CatSocial, CatCompatibility, CatAge
 from scripts.cat.factories.new_cat_factory import NewCatFactory
 from scripts.cat.factories.create_example_cat import create_example_cats
-from scripts.cat.factories.enums import CatType
+from scripts.cat.factories.typed_dicts import StatusDict
 from scripts.cat.names import names
 from scripts.cat.save_load import (
     save_cats,
@@ -39,7 +39,6 @@ from scripts.clan_resources.point_of_interest import (
     get_poi_save_dict,
     generate_and_add_new_poi,
     PoiType,
-    get_poi_names_set,
     clear_pois,
 )
 from scripts.config import get_config
@@ -133,7 +132,7 @@ class Clan:
         # This is the first cat in starclan, to "guide" the other dead cats there.
         self.clan_cats = []
         self.biome = biome
-        self.override_biome = None
+        self.override_biome: Optional[str] = None
         self.camp_bg = camp_bg
         self.chosen_symbol = symbol
         self.game_mode = game_mode
@@ -177,7 +176,7 @@ class Clan:
         rebuild_top_menu_buttons()
 
     @property
-    def current_season(self):
+    def current_season(self) -> str:
         season_length = get_config("seasons.length")
         calendar = get_config("seasons.calendar")
         modifiers = {
@@ -256,7 +255,7 @@ class Clan:
         )
 
         self.instructor = NewCatFactory.create_cat(
-            status_dict={"rank": instructor_rank, "group_ID": CatGroup.STARCLAN_ID},
+            status_dict=StatusDict(rank=instructor_rank, group_ID=CatGroup.STARCLAN_ID),
             backstory=choice(
                 BACKSTORIES["backstory_categories"]["clan_guide_backstories"]
             ),
@@ -399,7 +398,8 @@ class Clan:
             self.leader.generate_lead_ceremony()
         if self.clancount == "multiclan":
             for clan in self.all_other_clans:
-                clan.leader.generate_lead_ceremony()
+                if clan.leader:
+                    clan.leader.generate_lead_ceremony()
 
         self.save_clan()
         save_clanlist(self.save_id)
@@ -806,10 +806,10 @@ class Clan:
             game.clan.add_cat(game.clan.instructor)
         else:
             game.clan.instructor = NewCatFactory.create_cat(
-                status_dict={
-                    "rank": choice((CatRank.WARRIOR, CatRank.WARRIOR, CatRank.ELDER)),
-                    "group": CatGroup.STARCLAN,
-                },
+                status_dict=StatusDict(
+                    rank=choice([CatRank.WARRIOR, CatRank.WARRIOR, CatRank.ELDER]),
+                    group_ID=CatGroup.STARCLAN_ID,
+                )
             )
             game.clan.instructor.status.group_history.insert(0, {"rank": game.clan.instructor.status.rank, "group": CatGroup.PLAYER_CLAN_ID, "moons_as": self.instructor.moons})
             # update_sprite(game.clan.instructor)
@@ -1630,9 +1630,12 @@ class OtherClan:
             self.instructor.dead_for = randint(20, 200)
             self.instructor.status.group_history.insert(0, {"rank": instructor_rank, "group": self.group_ID, "moons_as": self.instructor.moons})
 
+            member_amount = get_config("clan_creation.neighbourclan_cats")
             possible_cats = create_example_cats(
                 majority_rank=get_config("clan_creation.majority_rank"),
                 rank_weights=get_config("clan_creation.rank_weights"),
+                max_cats=member_amount[1]+3,
+                clan=self.group_ID
             )
             grown_cats = [
                 c
@@ -1649,8 +1652,7 @@ class OtherClan:
             if grown_cats and get_config("clan_creation.ranks_needed.medicine_cat"):
                 self.new_medicine_cat(choice(grown_cats))
                 grown_cats.remove(self.medicine_cat)
-
-            member_amount = get_config("clan_creation.neighbourclan_cats")
+            member_amount = randint(member_amount[0], member_amount[1])
 
             members = choices(
                 [
@@ -1666,18 +1668,13 @@ class OtherClan:
                 k=member_amount,
             )
 
-            for cat_id in [cat.ID for cat in members + [self.leader, self.deputy, self.medicine_cat]]:
-                if cat_id not in game.clan.clan_cats:
-                    game.clan.clan_cats.append(cat_id)
-                    the_cat = Cat.all_cats.get(cat_id)
-
-                # give thoughts,actions and relationships to cats
-                    the_cat.init_all_relationships()
-                    if not the_cat.dead:
-                        the_cat.backstory = "clan_founder"
-                    if the_cat.status.rank == CatRank.APPRENTICE:
-                        the_cat.rank_change(CatRank.APPRENTICE, new_thought=False)
-                    the_cat.pelt.rebuild_sprite = True
+            for cat in possible_cats:
+                if cat not in members + [self.leader, self.deputy, self.medicine_cat]:
+                    del Cat.all_cats[cat.ID]
+                    Cat.all_cats_list.remove(cat)
+                    if cat.ID in game.clan.clan_cats:
+                        game.clan.clan_cats.remove(cat.ID)
+                    continue
 
     @property
     def name(self):
